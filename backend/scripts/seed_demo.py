@@ -4,7 +4,8 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 
 from src.config.settings import IS_MYSQL, engine
 from src.constants.workflow import Role
-from src.models.tables import audit, cases, evidence, runs, schema, users
+from src.models.tables import (audit, batch_items, batches, cases, evidence,
+                               runs, schema, users)
 from src.services.domain import SPEC
 from src.services.security import hash_password
 from src.utils.time import utc_time
@@ -25,6 +26,10 @@ def seed():
                 'password_hash': hash_password('Demo-Walkthrough-2026')})
         keep_existing(conn, cases, 'slug', {'slug': 'demo', 'title': SPEC['name'],
             'payload': SPEC['sample'], 'author': 'demo', 'created_at': utc_time()})
+        if not conn.execute(select(batches).where(batches.c.slug == 'demo-batch')).first():
+            batch_id = conn.execute(batches.insert().values(slug='demo-batch', title='L17 卷交付批',
+                owner='demo', created_at=utc_time())).inserted_primary_key[0]
+            conn.execute(batch_items.insert().values(batch_id=batch_id, asset='L17-frame07.dpx'))
         return {table.name: conn.execute(select(func.count()).select_from(table)).scalar_one()
                 for table in (users, cases, runs, evidence, audit)}
 

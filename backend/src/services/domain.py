@@ -145,6 +145,15 @@ def validate(payload):
     _prepare(payload)
 
 
+def submitted_version(payload):
+    """本次执行送检的底片与送检版：还原快照对应的底片文件名与快照编号。"""
+    selected = payload.get('restore_snapshot')
+    for row in payload.get('snapshots') or []:
+        if isinstance(row, dict) and row.get('snapshot_id') == selected:
+            return row.get('asset'), selected
+    return None, selected
+
+
 def _restore_row(stage, manifest, restored):
     if restored.issues:
         verdict = '块查验失败'

@@ -3,10 +3,11 @@ import uuid
 
 from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 
 from src.config.settings import cache, engine
 from src.constants.workflow import Status
-from src.models.tables import audit, cases, evidence, runs
+from src.models.tables import asset_locks, audit, cases, evidence, runs
 from src.services import domain
 from src.utils.encoding import canonical
 from src.utils.time import utc_time
@@ -14,6 +15,22 @@ from src.utils.time import utc_time
 
 def log(conn, actor, action, reference):
     conn.execute(audit.insert().values(actor=actor, action=action, reference=str(reference), created_at=utc_time()))
+
+
+def lock_assets(conn, assets):
+    """按字典序逐份锁定底片，送检与交接据此互斥。
+
+    交接在持有批内全部底片锁之后才读取执行与证据，因此并发的新送检
+    要么已经落库并对交接可见，要么被行锁挡在交接提交之后。
+    """
+    for asset in sorted(set(assets)):
+        try:
+            with conn.begin_nested():
+                conn.execute(asset_locks.insert().values(asset=asset))
+        except IntegrityError:
+            pass
+        if conn.dialect.name != 'sqlite':
+            conn.execute(select(asset_locks.c.asset).where(asset_locks.c.asset == asset).with_for_update()).one()
 
 
 def recent(table):
@@ -48,9 +65,13 @@ def make_case(title, payload, actor):
 
 def enqueue(case_id, actor):
     with engine.begin() as conn:
-        found(conn, cases, case_id)
+        case = found(conn, cases, case_id)
+        asset, snapshot = domain.submitted_version(case['payload'])
+        if asset:
+            lock_assets(conn, [asset])
         run_id = conn.execute(runs.insert().values(case_id=case_id, status=Status.QUEUED,
-                              owner=actor, created_at=utc_time())).inserted_primary_key[0]
+                              owner=actor, asset=asset, snapshot=snapshot,
+                              created_at=utc_time())).inserted_primary_key[0]
         log(conn, actor, 'enqueue', run_id)
         result = found(conn, runs, run_id)
     try:
